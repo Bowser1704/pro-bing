@@ -708,6 +708,11 @@ type testPacketConnBadRead struct {
 	testPacketConn
 }
 
+// SetIfIndex implements packetConn.
+func (testPacketConnBadRead) SetIfIndex(ifIndex int) {
+	panic("unimplemented")
+}
+
 func (c testPacketConnBadRead) ReadFrom(b []byte) (n int, ttl int, src net.Addr, err error) {
 	return 0, 0, nil, errors.New("bad read")
 }
@@ -739,6 +744,11 @@ type testPacketConnOK struct {
 	writeDone int32
 	buf       []byte
 	dst       net.Addr
+}
+
+// SetIfIndex implements packetConn.
+func (*testPacketConnOK) SetIfIndex(ifIndex int) {
+	panic("unimplemented")
 }
 
 func (c *testPacketConnOK) WriteTo(b []byte, dst net.Addr) (int, error) {
@@ -830,6 +840,27 @@ func TestRunWithBackgroundContext(t *testing.T) {
 
 	err = pinger.run(context.Background(), conn)
 	AssertTrue(t, err == nil)
+
+	stats := pinger.Statistics()
+	AssertTrue(t, stats != nil)
+	if stats == nil {
+		t.FailNow()
+	}
+	AssertTrue(t, stats.PacketsRecv == 10)
+}
+
+func TestUDPPing(t *testing.T) {
+	pinger := New("127.0.0.1")
+	pinger.Count = 10
+	pinger.Interval = 100 * time.Millisecond
+	pinger.EnableUDPPing = true
+	pinger.UDPPort = 9999
+
+	err := pinger.Resolve()
+	AssertNoError(t, err)
+
+	err = pinger.Run()
+	AssertNoError(t, err)
 
 	stats := pinger.Statistics()
 	AssertTrue(t, stats != nil)
