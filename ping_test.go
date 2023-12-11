@@ -674,6 +674,11 @@ type testPacketConnBadWrite struct {
 	testPacketConn
 }
 
+// SetIfIndex implements packetConn.
+func (testPacketConnBadWrite) SetIfIndex(ifIndex int) {
+	panic("unimplemented")
+}
+
 func (c testPacketConnBadWrite) WriteTo(b []byte, dst net.Addr) (int, error) {
 	return 0, errors.New("bad write")
 }
