@@ -195,6 +195,12 @@ type Pinger struct {
 	// Interface used to send/recv ICMP messages
 	Interface string
 
+	// Enable udp ping
+	EnableUDPPing bool
+
+	// UDPport
+	UDPPort int
+
 	// Channel and mutex used to communicate when the Pinger should stop between goroutines.
 	done chan interface{}
 	lock sync.Mutex
@@ -481,6 +487,7 @@ func (p *Pinger) RunWithContext(ctx context.Context) error {
 		conn.SetIfIndex(iface.Index)
 	}
 
+	log.Printf("reached here, %#v", conn)
 	return p.run(ctx, conn)
 }
 
@@ -867,8 +874,13 @@ func (p *Pinger) listen() (packetConn, error) {
 		conn packetConn
 		err  error
 	)
-
-	if p.ipv4 {
+	if p.EnableUDPPing && p.UDPPort != 0 {
+		target := &net.UDPAddr{
+			IP:   p.ipaddr.IP,
+			Port: p.UDPPort,
+		}
+		conn, err = newUDPConn(target, p.Interface)
+	} else if p.ipv4 {
 		var c icmpv4Conn
 		c.c, err = icmp.ListenPacket(ipv4Proto[p.protocol], p.Source)
 		conn = &c

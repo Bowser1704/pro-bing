@@ -1,8 +1,12 @@
 package probing
 
 import (
+	"context"
+	"fmt"
 	"net"
+	"os"
 	"runtime"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/icmp"
@@ -126,3 +130,139 @@ func (c *icmpV6Conn) WriteTo(b []byte, dst net.Addr) (int, error) {
 
 	return c.c.IPv6PacketConn().WriteTo(b, cm, dst)
 }
+
+type udpConn struct {
+	conn net.Conn
+
+	ifIndex int
+	ttl     int
+}
+
+// Close implements packetConn.
+func (u *udpConn) Close() error {
+	return u.conn.Close()
+}
+
+// ICMPRequestType implements packetConn.
+func (*udpConn) ICMPRequestType() icmp.Type {
+	return ipv4.ICMPTypeEcho
+}
+
+// ReadFrom implements packetConn.
+func (u *udpConn) ReadFrom(b []byte) (n int, ttl int, src net.Addr, err error) {
+	n, err = u.conn.Read(b)
+	ttl = u.ttl
+	src = u.conn.RemoteAddr()
+	return
+}
+
+// WriteTo implements packetConn.
+func (u *udpConn) WriteTo(b []byte, dst net.Addr) (int, error) {
+	return u.conn.Write(b)
+}
+
+// SetFlagTTL implements packetConn.
+func (*udpConn) SetFlagTTL() error {
+	return nil
+}
+
+// SetIfIndex implements packetConn.
+func (u *udpConn) SetIfIndex(ifIndex int) {
+	u.ifIndex = ifIndex
+}
+
+// SetTTL implements packetConn.
+func (u *udpConn) SetTTL(ttl int) {
+	u.ttl = ttl
+}
+
+// SetReadDeadline implements packetConn.
+func (u *udpConn) SetReadDeadline(t time.Time) error {
+	return u.conn.SetReadDeadline(t)
+}
+
+// SetMark implements packetConn.
+func (u *udpConn) SetMark(mark uint) error {
+	fd, err := getRawFD(u.conn)
+	if err != nil {
+		return err
+	}
+	return os.NewSyscallError(
+		"setsockopt",
+		syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, int(mark)),
+	)
+}
+
+// SetDoNotFragment implements packetConn.
+func (u *udpConn) SetDoNotFragment() error {
+	fd, err := getRawFD(u.conn)
+	if err != nil {
+		return err
+	}
+	return os.NewSyscallError(
+		"setsockopt",
+		syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, syscall.IPV6_MTU_DISCOVER, syscall.IP_PMTUDISC_DO),
+	)
+}
+
+func getRawFD(conn net.Conn) (int, error) {
+	// This type assertion assumes that the underlying implementation of net.Conn
+	// uses a *net.TCPConn or *net.UDPConn. It may not work for all types of connections.
+	switch conn := conn.(type) {
+	case *net.TCPConn:
+		// Get the file descriptor associated with the TCP connection
+		rawConn, err := conn.SyscallConn()
+		if err != nil {
+			return -1, err
+		}
+		var fd int
+		err = rawConn.Control(func(fdPtr uintptr) {
+			fd = int(fdPtr)
+		})
+		if err != nil {
+			return -1, err
+		}
+		return fd, nil
+
+	case *net.UDPConn:
+		// Get the file descriptor associated with the UDP connection
+		rawConn, err := conn.SyscallConn()
+		if err != nil {
+			return -1, err
+		}
+		var fd int
+		err = rawConn.Control(func(fdPtr uintptr) {
+			fd = int(fdPtr)
+		})
+		if err != nil {
+			return -1, err
+		}
+		return fd, nil
+
+	default:
+		return -1, fmt.Errorf("unsupported connection type")
+	}
+}
+
+func newUDPConn(remote *net.UDPAddr, interfaceName string) (packetConn, error) {
+	var dialer net.Dialer
+	dialer.ControlContext = func(ctx context.Context, network, addr string, c syscall.RawConn) error {
+		return c.Control(func(fd uintptr) {
+			if interfaceName != "" {
+				if err := syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, interfaceName); err != nil {
+					fmt.Println("setsockopt SO_BINDTODEVICE failed: ", err)
+				}
+			}
+		})
+	}
+
+	conn, err := dialer.Dial("udp", remote.String())
+
+	return &udpConn{
+		conn:    conn,
+		ifIndex: 0,
+		ttl:     0,
+	}, err
+}
+
+var _ packetConn = (*udpConn)(nil)
